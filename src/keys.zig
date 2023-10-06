@@ -4,7 +4,7 @@ const libsecp256k1 = @import("libsecp256k1.zig");
 
 const KeyCreationError = error{ ErrorSerializingPublicKey, ErrorCreatingPublicKey };
 
-pub fn get_public_key(pk: *[32]u8, sk: *[32]u8) KeyCreationError!void {
+pub fn getPublicKey(pk: *[32]u8, sk: *[32]u8) KeyCreationError!void {
     var c_pk: c.secp256k1_pubkey = undefined;
     if (c.secp256k1_ec_pubkey_create(libsecp256k1.getContext(), &c_pk, sk) == 0) {
         return KeyCreationError.ErrorCreatingPublicKey;

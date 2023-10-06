@@ -23,6 +23,6 @@ pub fn main() !void {
     std.debug.print("private key: {s}\n", .{std.fmt.fmtSliceHexLower(&sk)});
 
     var pk: [32]u8 = undefined;
-    try keys.get_public_key(&pk, &sk);
+    try keys.getPublicKey(&pk, &sk);
     std.debug.print("public key: {s}\n", .{std.fmt.fmtSliceHexLower(&pk)});
 }
