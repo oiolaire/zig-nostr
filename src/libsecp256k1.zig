@@ -1,4 +1,10 @@
-const c = @cImport(@cInclude("secp256k1.h"));
+const c = @cImport({
+    @cInclude("secp256k1.h");
+    @cInclude("secp256k1_extrakeys.h");
+    @cInclude("secp256k1_schnorrsig.h");
+});
+
+pub usingnamespace c;
 
 const FLAGS_TYPE_CONTEXT = 1 << 0;
 const FLAGS_BIT_CONTEXT_VERIFY = 1 << 8;

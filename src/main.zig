@@ -1,28 +1,55 @@
 const std = @import("std");
 const keys = @import("keys.zig");
-
-const sha256 = std.crypto.hash.sha2.Sha256;
-const Check = std.heap.Check;
+const event = @import("event.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         var x = gpa.deinit();
         switch (x) {
-            Check.ok => std.debug.print("ok\n", .{}),
-            Check.leak => std.debug.print("has leaked\n", .{}),
+            std.heap.Check.ok => std.debug.print("ok\n", .{}),
+            std.heap.Check.leak => std.debug.print("has leaked\n", .{}),
         }
     }
+    var allocator = gpa.allocator();
 
     var input: [32]u8 = undefined;
     var n = try std.io.getStdIn().read(&input);
     std.debug.print("input ({}): {}\n", .{ n, std.fmt.fmtSliceHexLower(&input) });
 
-    var sk: [32]u8 = undefined;
-    sha256.hash(&input, &sk, .{});
-    std.debug.print("private key: {s}\n", .{std.fmt.fmtSliceHexLower(&sk)});
+    var skBytes: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&input, &skBytes, .{});
+    std.debug.print("private key: {s}\n", .{std.fmt.fmtSliceHexLower(&skBytes)});
 
+    const sk = try keys.parseKey(&skBytes);
     var pk: [32]u8 = undefined;
-    try keys.getPublicKey(&pk, &sk);
+    sk.serializedPublicKey(&pk);
     std.debug.print("public key: {s}\n", .{std.fmt.fmtSliceHexLower(&pk)});
+
+    var tags = try allocator.alloc(
+        [][]const u8,
+        2,
+    );
+    defer allocator.free(tags);
+
+    var firstTag = try allocator.alloc([]const u8, 2);
+    defer allocator.free(firstTag);
+    firstTag[0] = "t";
+    firstTag[1] = "music";
+    tags[0] = firstTag;
+
+    var secondTag = try allocator.alloc([]const u8, 2);
+    defer allocator.free(secondTag);
+    secondTag[0] = "t";
+    secondTag[1] = "prog";
+    tags[1] = secondTag;
+
+    var evt: event.Event = .{
+        .kind = 1,
+        .content = "bandinha nova não é rock progressivo",
+        .tags = tags,
+    };
+    try event.finalizeEvent(&evt, sk, allocator);
+
+    std.debug.print("event: {}\n", .{});
 }

@@ -1,21 +1,36 @@
 const std = @import("std");
-const c = @cImport(@cInclude("secp256k1.h"));
 const libsecp256k1 = @import("libsecp256k1.zig");
 
-const KeyCreationError = error{ ErrorSerializingPublicKey, ErrorCreatingPublicKey };
+pub const Error = error{ ErrorParsingSecretKey, ErrorSigningMessage };
 
-pub fn getPublicKey(pk: *[32]u8, sk: *[32]u8) KeyCreationError!void {
-    var c_pk: c.secp256k1_pubkey = undefined;
-    if (c.secp256k1_ec_pubkey_create(libsecp256k1.getContext(), &c_pk, sk) == 0) {
-        return KeyCreationError.ErrorCreatingPublicKey;
+pub fn parseKey(sk: *[32]u8) Error!SecretKey {
+    const ctx = libsecp256k1.getContext();
+
+    var c_keypair: libsecp256k1.secp256k1_keypair = undefined;
+    if (0 == libsecp256k1.secp256k1_keypair_create(ctx, &c_keypair, sk)) {
+        return Error.ErrorParsingSecretKey;
     }
 
-    var size: usize = 33;
-    var comp_pk: [33]u8 = undefined;
-    if (c.secp256k1_ec_pubkey_serialize(libsecp256k1.getContext(), &comp_pk, &size, &c_pk, libsecp256k1.EC_COMPRESSED) == 0) {
-        return KeyCreationError.ErrorSerializingPublicKey;
-    }
-
-    std.mem.copy(u8, pk, comp_pk[1..33]);
-    return;
+    return SecretKey{
+        .ctx = ctx,
+        .keypair = c_keypair,
+    };
 }
+
+pub const SecretKey = struct {
+    ctx: *libsecp256k1.secp256k1_context,
+    keypair: libsecp256k1.secp256k1_keypair,
+
+    pub fn serializedPublicKey(self: SecretKey, pk: *[32]u8) void {
+        var xonly_pk: libsecp256k1.secp256k1_xonly_pubkey = undefined;
+        _ = libsecp256k1.secp256k1_keypair_xonly_pub(self.ctx, &xonly_pk, null, &self.keypair);
+        _ = libsecp256k1.secp256k1_xonly_pubkey_serialize(self.ctx, pk, &xonly_pk);
+        return;
+    }
+
+    pub fn sign(self: SecretKey, sig: *[64]u8, msg: [32]u8) Error!void {
+        if (0 == libsecp256k1.secp256k1_schnorrsig_sign32(libsecp256k1.getContext(), sig, &msg, &self.keypair, null)) {
+            return Error.ErrorSigningMessage;
+        }
+    }
+};
