@@ -3,20 +3,10 @@ const keys = @import("keys.zig");
 const event = @import("event.zig");
 const string = @import("string.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        var x = gpa.deinit();
-        switch (x) {
-            std.heap.Check.ok => std.debug.print("ok\n", .{}),
-            std.heap.Check.leak => std.debug.print("has leaked\n", .{}),
-        }
-    }
-    var allocator = gpa.allocator();
+test "create keys and sign event" {
+    var allocator = std.testing.allocator;
 
-    var input: [32]u8 = undefined;
-    var n = try std.io.getStdIn().read(&input);
-    std.debug.print("input ({}): {}\n", .{ n, std.fmt.fmtSliceHexLower(&input) });
+    var input: [32]u8 = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 };
 
     var skBytes: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(&input, &skBytes, .{});
