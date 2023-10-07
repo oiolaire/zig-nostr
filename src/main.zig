@@ -1,6 +1,7 @@
 const std = @import("std");
 const keys = @import("keys.zig");
 const event = @import("event.zig");
+const string = @import("string.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -49,7 +50,10 @@ pub fn main() !void {
         .content = "bandinha nova não é rock progressivo",
         .tags = tags,
     };
-    try event.finalizeEvent(&evt, sk, allocator);
+    try evt.finalize(sk, allocator);
 
-    std.debug.print("event: {}\n", .{});
+    var s = string.init(allocator);
+    defer s.deinit();
+    try evt.serialize(&s);
+    std.debug.print("event: {s}\n", .{s.str()});
 }
