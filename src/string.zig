@@ -45,7 +45,6 @@ pub const String = struct {
 
     /// Allocates space for the internal buffer
     pub fn allocate(self: *String, bytes: usize) Error!void {
-        std.debug.print("allocating {}\n", .{bytes});
         if (self.buffer) |buffer| {
             if (bytes < self.size) self.size = bytes; // Clamp size to capacity
             self.buffer = self.allocator.realloc(buffer, bytes) catch {

@@ -56,4 +56,13 @@ pub fn main() !void {
     defer s.deinit();
     try evt.serialize(&s);
     std.debug.print("event: {s}\n", .{s.str()});
+
+    if (evt.verify(allocator)) {
+        std.debug.print("valid\n", .{});
+    } else |err| switch (err) {
+        event.ValidationError.InvalidPublicKey => std.debug.print("invalid public key\n", .{}),
+        event.ValidationError.IdDoesntMatch => std.debug.print("id doesn't match\n", .{}),
+        event.ValidationError.InvalidSignature => std.debug.print("invalid signature\n", .{}),
+        event.ValidationError.InternalError => std.debug.print("internal error\n", .{}),
+    }
 }
