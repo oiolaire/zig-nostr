@@ -1,17 +1,22 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
+    // library
     const lib = b.addStaticLibrary(.{
         .name = "zig-nostr",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = b.standardTargetOptions(.{}),
         .optimize = b.standardOptimizeOption(.{}),
     });
-    b.installArtifact(lib);
-
     lib.linkSystemLibrary("c");
     lib.linkSystemLibrary("secp256k1");
+    b.installArtifact(lib);
 
+    // module
+    const mod = b.createModule(.{ .source_file = .{ .path = "src/mod.zig" } });
+    try b.modules.put(b.dupe("zig-nostr"), mod);
+
+    // tests
     const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
     });

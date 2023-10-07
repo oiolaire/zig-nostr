@@ -1,7 +1,5 @@
 const std = @import("std");
-const keys = @import("keys.zig");
-const event = @import("event.zig");
-const string = @import("string.zig");
+const nostr = @import("mod.zig");
 
 test "create keys and sign event" {
     var allocator = std.testing.allocator;
@@ -12,7 +10,7 @@ test "create keys and sign event" {
     std.crypto.hash.sha2.Sha256.hash(&input, &skBytes, .{});
     std.debug.print("private key: {s}\n", .{std.fmt.fmtSliceHexLower(&skBytes)});
 
-    const sk = try keys.parseKey(&skBytes);
+    const sk = try nostr.parseKey(&skBytes);
     var pk: [32]u8 = undefined;
     sk.serializedPublicKey(&pk);
     std.debug.print("public key: {s}\n", .{std.fmt.fmtSliceHexLower(&pk)});
@@ -26,23 +24,23 @@ test "create keys and sign event" {
     var firstTag = try allocator.alloc([]const u8, 2);
     defer allocator.free(firstTag);
     firstTag[0] = "t";
-    firstTag[1] = "music";
+    firstTag[1] = "spam";
     tags[0] = firstTag;
 
     var secondTag = try allocator.alloc([]const u8, 2);
     defer allocator.free(secondTag);
     secondTag[0] = "t";
-    secondTag[1] = "prog";
+    secondTag[1] = "test";
     tags[1] = secondTag;
 
-    var evt: event.Event = .{
+    var evt: nostr.Event = .{
         .kind = 1,
-        .content = "bandinha nova não é rock progressivo",
+        .content = "hello world",
         .tags = tags,
     };
     try evt.finalize(sk, allocator);
 
-    var s = string.init(allocator);
+    var s = nostr.string.init(allocator);
     defer s.deinit();
     try evt.serialize(&s);
     std.debug.print("event: {s}\n", .{s.str()});
@@ -50,9 +48,9 @@ test "create keys and sign event" {
     if (evt.verify(allocator)) {
         std.debug.print("valid\n", .{});
     } else |err| switch (err) {
-        event.ValidationError.InvalidPublicKey => std.debug.print("invalid public key\n", .{}),
-        event.ValidationError.IdDoesntMatch => std.debug.print("id doesn't match\n", .{}),
-        event.ValidationError.InvalidSignature => std.debug.print("invalid signature\n", .{}),
-        event.ValidationError.InternalError => std.debug.print("internal error\n", .{}),
+        nostr.ValidationError.InvalidPublicKey => std.debug.print("invalid public key\n", .{}),
+        nostr.ValidationError.IdDoesntMatch => std.debug.print("id doesn't match\n", .{}),
+        nostr.ValidationError.InvalidSignature => std.debug.print("invalid signature\n", .{}),
+        nostr.ValidationError.InternalError => std.debug.print("internal error\n", .{}),
     }
 }
