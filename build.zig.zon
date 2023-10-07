@@ -1,4 +1,10 @@
 .{
   .name = "zig-nostr",
-  .version = "0.0.2",
+  .version = "0.0.3",
+  .dependencies = .{
+    .ws = .{
+      .url = "https://github.com/nikneym/ws/archive/b9613381a187d500df34e13e7e440bc602771326.tar.gz",
+      .hash = "1220018d482780feca78b5b29217314c493be75fc17fb8296e76b39ca712d63a71b3"
+    }
+  }
 }
