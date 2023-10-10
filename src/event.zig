@@ -4,11 +4,99 @@ const keys = @import("keys.zig");
 const string = @import("string.zig");
 
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
+pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue };
+
+pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var aa = arena.allocator();
+    var scanner = std.json.Scanner.initCompleteInput(aa, json);
+    defer scanner.deinit();
+
+    if (.object_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
+
+    var event = Event{};
+    var missing_fields: u8 = 7;
+    while (missing_fields > 0) {
+        var name_token: ?std.json.Token = try scanner.nextAllocMax(aa, .alloc_if_needed, std.json.default_max_value_len);
+        switch (name_token.?) {
+            inline .string, .allocated_string => |name| {
+                std.debug.print("name={s}\n", .{name_token.?.string});
+                if (std.mem.eql(u8, name, "id")) {
+                    var val = try scanner.next();
+                    if (val == .string) {
+                        _ = try std.fmt.hexToBytes(
+                            &event.id,
+                            val.string,
+                        );
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else if (std.mem.eql(u8, name, "pubkey")) {
+                    var val = try scanner.next();
+                    if (val == .string) {
+                        _ = try std.fmt.hexToBytes(
+                            &event.pubkey,
+                            val.string,
+                        );
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else if (std.mem.eql(u8, name, "kind")) {
+                    var val = try scanner.next();
+                    if (val == .number) {
+                        event.kind = try std.fmt.parseInt(u16, val.number, 10);
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else if (std.mem.eql(u8, name, "created_at")) {
+                    var val = try scanner.next();
+                    if (val == .number) {
+                        event.created_at = try std.fmt.parseInt(i64, val.number, 10);
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else if (std.mem.eql(u8, name, "content")) {
+                    var val = try scanner.next();
+                    if (val == .string) {
+                        event.content = val.string;
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else if (std.mem.eql(u8, name, "tags")) {
+                    if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
+                    // TODO
+                    if (.array_end != try scanner.next()) return DeserializationError.UnexpectedToken;
+                } else if (std.mem.eql(u8, name, "sig")) {
+                    var val = try scanner.next();
+                    if (val == .string) {
+                        std.debug.print("signature={s} ({})\n", .{ val.string, val.string.len });
+                        _ = try std.fmt.hexToBytes(
+                            &event.sig,
+                            val.string,
+                        );
+                    } else {
+                        return DeserializationError.UnexpectedValue;
+                    }
+                } else {
+                    continue;
+                }
+                missing_fields -= 1;
+            },
+            else => {
+                std.debug.print("unexpected={?}\n", .{name_token});
+            },
+        }
+    }
+
+    return event;
+}
 
 pub const Event = struct {
-    kind: u16,
-    content: []const u8,
-    tags: [][][]const u8 = undefined,
+    kind: u16 = 1,
+    content: []const u8 = &.{},
+    tags: [][][]const u8 = &.{},
     created_at: i64 = undefined,
     pubkey: [32]u8 = undefined,
     id: [32]u8 = undefined,
@@ -111,3 +199,13 @@ pub const Event = struct {
         try w.concat("]");
     }
 };
+
+test "deserialize event" {
+    var allocator = std.testing.allocator;
+
+    const data =
+        \\ {"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
+    ;
+    const event = try deserialize(data, allocator);
+    std.debug.print("got {}\n", .{event});
+}

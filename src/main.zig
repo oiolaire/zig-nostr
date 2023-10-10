@@ -53,6 +53,4 @@ test "create keys and sign event" {
         nostr.ValidationError.InvalidSignature => std.debug.print("invalid signature\n", .{}),
         nostr.ValidationError.InternalError => std.debug.print("internal error\n", .{}),
     }
-
-    try nostr.relay.connect("wss://nostr-pub.wellorder.net", allocator);
 }
