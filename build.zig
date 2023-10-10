@@ -7,13 +7,13 @@ pub fn build(b: *std.Build) !void {
     // library
     const lib = b.addStaticLibrary(.{
         .name = "zig-nostr",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/mod.zig" },
         .target = target,
         .optimize = optimize,
     });
 
     // dependencies
-    const ws = b.dependency("ws", .{
+    const webzocket = b.dependency("webzocket", .{
         .target = target,
         .optimize = optimize,
     });
@@ -41,6 +41,6 @@ pub fn build(b: *std.Build) !void {
     inline for ([_]*std.build.Step.Compile{ tests, lib }) |pkg| {
         pkg.linkSystemLibrary("c");
         pkg.linkSystemLibrary("secp256k1");
-        pkg.addModule("ws", ws.module("ws"));
+        pkg.addModule("webzocket", webzocket.module("webzocket"));
     }
 }
