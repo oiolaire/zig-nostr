@@ -4,7 +4,9 @@ const keys = @import("keys.zig");
 const string = @import("string.zig");
 
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
-pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue };
+pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems };
+
+const MAX_TAG_ITEMS = 32;
 
 pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -22,7 +24,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
         var name_token: ?std.json.Token = try scanner.nextAllocMax(aa, .alloc_if_needed, std.json.default_max_value_len);
         switch (name_token.?) {
             inline .string, .allocated_string => |name| {
-                std.debug.print("name={s}\n", .{name_token.?.string});
                 if (std.mem.eql(u8, name, "id")) {
                     var val = try scanner.next();
                     if (val == .string) {
@@ -65,13 +66,60 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                         return DeserializationError.UnexpectedValue;
                     }
                 } else if (std.mem.eql(u8, name, "tags")) {
+                    var tags = try std.ArrayList([][]const u8).initCapacity(allocator, 15);
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
-                    // TODO
-                    if (.array_end != try scanner.next()) return DeserializationError.UnexpectedToken;
+                    var tag_open = false;
+
+                    var tag: [][]const u8 = try allocator.alloc([]const u8, MAX_TAG_ITEMS);
+                    defer allocator.free(tag);
+
+                    var t: usize = 0;
+                    while (true) {
+                        switch (try scanner.next()) {
+                            .array_begin => {
+                                if (tag_open) {
+                                    // can't have arrays inside tags
+                                    return DeserializationError.UnexpectedValue;
+                                }
+
+                                // initializing a tag
+                                tag_open = true;
+                                t = 0;
+                            },
+                            .array_end => {
+                                if (tag_open) {
+                                    // closing a tag
+                                    tag_open = false;
+                                    try tags.append(tag);
+                                } else {
+                                    // closing the tags list
+                                    break;
+                                }
+                            },
+                            .string => |v| {
+                                if (!tag_open) {
+                                    // can't have a loose string inside the tags array
+                                    return DeserializationError.UnexpectedValue;
+                                }
+
+                                // an item inside a tag
+                                tag[t] = v;
+                                t += 1;
+                                if (t > MAX_TAG_ITEMS) {
+                                    return DeserializationError.TooManyTagItems;
+                                }
+                            },
+                            else => {
+                                // this is not a valid tag
+                                return DeserializationError.UnexpectedValue;
+                            },
+                        }
+                    }
+
+                    event.tags = try tags.toOwnedSlice();
                 } else if (std.mem.eql(u8, name, "sig")) {
                     var val = try scanner.next();
                     if (val == .string) {
-                        std.debug.print("signature={s} ({})\n", .{ val.string, val.string.len });
                         _ = try std.fmt.hexToBytes(
                             &event.sig,
                             val.string,
@@ -200,12 +248,20 @@ pub const Event = struct {
     }
 };
 
-test "deserialize event" {
+test "deserialize and serialize events" {
     var allocator = std.testing.allocator;
 
     const data =
         \\ {"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
     ;
-    const event = try deserialize(data, allocator);
-    std.debug.print("got {}\n", .{event});
+    var event = try deserialize(data, allocator);
+
+    const expected: []const u8 =
+        \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife"}
+    ;
+    var buf = string.init(allocator);
+    defer buf.deinit();
+
+    try event.serialize(&buf);
+    try std.testing.expectEqualStrings(expected, buf.str());
 }
