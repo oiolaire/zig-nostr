@@ -4,78 +4,122 @@ const keys = @import("keys.zig");
 const string = @import("string.zig");
 
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
-pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems };
+pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
 
 const MAX_TAG_ITEMS = 32;
+const MAX_TAGS = 1024;
 
 pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var aa = arena.allocator();
-    var scanner = std.json.Scanner.initCompleteInput(aa, json);
+    var scanner = std.json.Scanner.initCompleteInput(allocator, json);
     defer scanner.deinit();
 
     if (.object_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
 
-    var event = Event{};
+    var event = Event{
+        .allocator = allocator,
+    };
     var missing_fields: u8 = 7;
     while (missing_fields > 0) {
-        var name_token: ?std.json.Token = try scanner.nextAllocMax(aa, .alloc_if_needed, std.json.default_max_value_len);
+        var name_token: ?std.json.Token = try scanner.nextAlloc(allocator, .alloc_if_needed);
         switch (name_token.?) {
             inline .string, .allocated_string => |name| {
+                // id, pubkey and sig are hex values, we will translate these into bytes so
+                // we prefer to not have to allocate them if possible (when the result is .string
+                // it is just a pointer to the original json buffer)
                 if (std.mem.eql(u8, name, "id")) {
-                    var val = try scanner.next();
-                    if (val == .string) {
-                        _ = try std.fmt.hexToBytes(
-                            &event.id,
-                            val.string,
-                        );
-                    } else {
-                        return DeserializationError.UnexpectedValue;
+                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                    switch (val) {
+                        .string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.id, str);
+                        },
+                        .allocated_string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.id, str);
+                            allocator.free(str);
+                        },
+                        else => {
+                            return DeserializationError.UnexpectedValue;
+                        },
                     }
                 } else if (std.mem.eql(u8, name, "pubkey")) {
-                    var val = try scanner.next();
-                    if (val == .string) {
-                        _ = try std.fmt.hexToBytes(
-                            &event.pubkey,
-                            val.string,
-                        );
+                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                    switch (val) {
+                        .string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.pubkey, str);
+                        },
+                        .allocated_string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.pubkey, str);
+                            allocator.free(str);
+                        },
+                        else => {
+                            return DeserializationError.UnexpectedValue;
+                        },
+                    }
+                } else if (std.mem.eql(u8, name, "sig")) {
+                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                    switch (val) {
+                        .string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.sig, str);
+                        },
+                        .allocated_string => |str| {
+                            _ = try std.fmt.hexToBytes(&event.sig, str);
+                            allocator.free(str);
+                        },
+                        else => {
+                            return DeserializationError.UnexpectedValue;
+                        },
+                    }
+                } else if (std.mem.eql(u8, name, "content")) {
+                    // content is different, we prefer to allocate because we will need to store
+                    // and keep track of it anyway.
+                    var val = try scanner.nextAlloc(allocator, .alloc_always);
+                    if (val == .allocated_string) {
+                        event.content = val.allocated_string;
                     } else {
                         return DeserializationError.UnexpectedValue;
                     }
                 } else if (std.mem.eql(u8, name, "kind")) {
-                    var val = try scanner.next();
-                    if (val == .number) {
-                        event.kind = try std.fmt.parseInt(u16, val.number, 10);
-                    } else {
-                        return DeserializationError.UnexpectedValue;
+                    // for numbers (kind and created_at) we also don't care to allocate
+                    // since we have to parse them into integers
+                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                    switch (val) {
+                        .number => |str| {
+                            event.kind = try std.fmt.parseInt(u16, str, 10);
+                        },
+                        .allocated_number => |str| {
+                            event.kind = try std.fmt.parseInt(u16, str, 10);
+                            allocator.free(str);
+                        },
+                        else => {
+                            return DeserializationError.UnexpectedValue;
+                        },
                     }
                 } else if (std.mem.eql(u8, name, "created_at")) {
-                    var val = try scanner.next();
-                    if (val == .number) {
-                        event.created_at = try std.fmt.parseInt(i64, val.number, 10);
-                    } else {
-                        return DeserializationError.UnexpectedValue;
-                    }
-                } else if (std.mem.eql(u8, name, "content")) {
-                    var val = try scanner.next();
-                    if (val == .string) {
-                        event.content = val.string;
-                    } else {
-                        return DeserializationError.UnexpectedValue;
+                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                    switch (val) {
+                        .number => |str| {
+                            event.created_at = try std.fmt.parseInt(i64, str, 10);
+                        },
+                        .allocated_number => |str| {
+                            event.created_at = try std.fmt.parseInt(i64, str, 10);
+                            allocator.free(str);
+                        },
+                        else => {
+                            return DeserializationError.UnexpectedValue;
+                        },
                     }
                 } else if (std.mem.eql(u8, name, "tags")) {
-                    var tags = try std.ArrayList([][]const u8).initCapacity(allocator, 15);
+                    // tags is the hardest thing, we will iterate through everything in this complicated setup
+                    // and we will allocate everything because we must keep everything just like with content
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
-                    var tag_open = false;
-
-                    var tag: [][]const u8 = try allocator.alloc([]const u8, MAX_TAG_ITEMS);
-                    defer allocator.free(tag);
-
+                    var tags = try allocator.alloc([][]const u8, MAX_TAGS);
                     var t: usize = 0;
+
+                    var tag_open = false;
+                    var tag: [][]const u8 = undefined;
+                    var ti: usize = 0; // keeps track of item indexes inside tags
                     while (true) {
-                        switch (try scanner.next()) {
+                        // we will allocate these and keep track of them
+                        switch (try scanner.nextAlloc(allocator, .alloc_always)) {
                             .array_begin => {
                                 if (tag_open) {
                                     // can't have arrays inside tags
@@ -84,13 +128,22 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
 
                                 // initializing a tag
                                 tag_open = true;
-                                t = 0;
+                                tag = try allocator.alloc([]const u8, MAX_TAG_ITEMS);
+                                ti = 0; // item index resets to zero
                             },
                             .array_end => {
                                 if (tag_open) {
                                     // closing a tag
                                     tag_open = false;
-                                    try tags.append(tag);
+
+                                    // take only the items that were filled in this tag
+                                    tags[t] = tag[0..ti];
+                                    allocator.free(tag[ti..]); // free the rest
+
+                                    t += 1; // advance this index
+                                    if (t > MAX_TAGS) {
+                                        return DeserializationError.TooManyTags;
+                                    }
                                 } else {
                                     // closing the tags list
                                     break;
@@ -103,9 +156,9 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                 }
 
                                 // an item inside a tag
-                                tag[t] = v;
-                                t += 1;
-                                if (t > MAX_TAG_ITEMS) {
+                                tag[ti] = v;
+                                ti += 1; // advance this index
+                                if (ti > MAX_TAG_ITEMS) {
                                     return DeserializationError.TooManyTagItems;
                                 }
                             },
@@ -115,18 +168,9 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             },
                         }
                     }
-
-                    event.tags = try tags.toOwnedSlice();
-                } else if (std.mem.eql(u8, name, "sig")) {
-                    var val = try scanner.next();
-                    if (val == .string) {
-                        _ = try std.fmt.hexToBytes(
-                            &event.sig,
-                            val.string,
-                        );
-                    } else {
-                        return DeserializationError.UnexpectedValue;
-                    }
+                    // take only the tags that were filled
+                    event.tags = tags[0..t];
+                    allocator.free(tags[t..]); // free the rest
                 } else {
                     continue;
                 }
@@ -149,6 +193,18 @@ pub const Event = struct {
     pubkey: [32]u8 = undefined,
     id: [32]u8 = undefined,
     sig: [64]u8 = undefined,
+    allocator: std.mem.Allocator = undefined,
+
+    pub fn deinit(self: Event) void {
+        self.allocator.free(self.content);
+        for (self.tags) |tag| {
+            for (tag) |item| {
+                self.allocator.free(item);
+            }
+            self.allocator.free(tag);
+        }
+        self.allocator.free(self.tags);
+    }
 
     pub fn verify(self: Event, allocator: std.mem.Allocator) ValidationError!void {
         // check id
@@ -255,6 +311,7 @@ test "deserialize and serialize events" {
         \\ {"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
     ;
     var event = try deserialize(data, allocator);
+    defer event.deinit();
 
     const expected: []const u8 =
         \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife"}
