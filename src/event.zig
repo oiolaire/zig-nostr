@@ -6,9 +6,6 @@ const string = @import("string.zig");
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
 pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
 
-const MAX_TAG_ITEMS = 32;
-const MAX_TAGS = 1024;
-
 pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
     var scanner = std.json.Scanner.initCompleteInput(allocator, json);
     defer scanner.deinit();
@@ -111,12 +108,10 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                     // tags is the hardest thing, we will iterate through everything in this complicated setup
                     // and we will allocate everything because we must keep everything just like with content
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
-                    var tags = try allocator.alloc([][]const u8, MAX_TAGS);
-                    var t: usize = 0;
+                    event.tags = try Tags.initCapacity(allocator, 100);
 
                     var tag_open = false;
-                    var tag: [][]const u8 = undefined;
-                    var ti: usize = 0; // keeps track of item indexes inside tags
+                    var tag: Tag = undefined;
                     while (true) {
                         // we will allocate these and keep track of them
                         switch (try scanner.nextAlloc(allocator, .alloc_always)) {
@@ -128,8 +123,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
 
                                 // initializing a tag
                                 tag_open = true;
-                                tag = try allocator.alloc([]const u8, MAX_TAG_ITEMS);
-                                ti = 0; // item index resets to zero
+                                tag = try Tag.initCapacity(allocator, 10);
                             },
                             .array_end => {
                                 if (tag_open) {
@@ -137,13 +131,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                     tag_open = false;
 
                                     // take only the items that were filled in this tag
-                                    tags[t] = tag[0..ti];
-                                    _ = try allocator.realloc(tag, ti);
-
-                                    t += 1; // advance this index
-                                    if (t > MAX_TAGS) {
-                                        return DeserializationError.TooManyTags;
-                                    }
+                                    try event.tags.append(tag);
                                 } else {
                                     // closing the tags list
                                     break;
@@ -156,11 +144,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                 }
 
                                 // an item inside a tag
-                                tag[ti] = v;
-                                ti += 1; // advance this index
-                                if (ti > MAX_TAG_ITEMS) {
-                                    return DeserializationError.TooManyTagItems;
-                                }
+                                try tag.append(v);
                             },
                             else => {
                                 // this is not a valid tag
@@ -168,9 +152,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             },
                         }
                     }
-                    // take only the tags that were filled
-                    event.tags = tags[0..t];
-                    _ = try allocator.realloc(tags, t);
                 } else {
                     continue;
                 }
@@ -185,10 +166,13 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
     return event;
 }
 
+pub const Tags = std.ArrayList(Tag);
+pub const Tag = std.ArrayList([]u8);
+
 pub const Event = struct {
     kind: u16 = 1,
     content: []const u8 = &.{},
-    tags: [][][]const u8 = &.{},
+    tags: Tags = undefined,
     created_at: i64 = undefined,
     pubkey: [32]u8 = undefined,
     id: [32]u8 = undefined,
@@ -197,13 +181,14 @@ pub const Event = struct {
 
     pub fn deinit(self: Event) void {
         self.allocator.free(self.content);
-        for (self.tags) |tag| {
-            for (tag) |item| {
+
+        for (self.tags.items) |tag| {
+            for (tag.items) |item| {
                 self.allocator.free(item);
             }
-            self.allocator.free(tag);
+            tag.deinit();
         }
-        self.allocator.free(self.tags);
+        self.tags.deinit();
     }
 
     pub fn verify(self: Event, allocator: std.mem.Allocator) ValidationError!void {
@@ -287,12 +272,12 @@ pub const Event = struct {
 
     fn serializeTags(self: Event, w: *string.String) !void {
         try w.concat("[");
-        for (self.tags, 0..) |tag, t| {
+        for (self.tags.items, 0..) |tag, t| {
             if (t != 0) {
                 try w.concat(",");
             }
             try w.concat("[");
-            for (tag, 0..) |item, i| {
+            for (tag.items, 0..) |item, i| {
                 if (i != 0) {
                     try w.concat(",");
                 }
