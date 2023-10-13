@@ -149,7 +149,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                     break;
                                 }
                             },
-                            .string => |v| {
+                            .allocated_string => |v| {
                                 if (!tag_open) {
                                     // can't have a loose string inside the tags array
                                     return DeserializationError.UnexpectedValue;
@@ -255,8 +255,6 @@ pub const Event = struct {
         try s.allocate("'id''','pubkey''','sig''','content''','tags'[],'kind'~~~~~,'created_at'~~~~~~~~~~,".len + 128 + 64 + 64 + self.content.len);
         try s.concat("{\"id\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.id, std.fmt.Case.lower), .{}, s.writer());
-        try s.concat(",\"sig\":");
-        try std.json.encodeJsonString(&std.fmt.bytesToHex(self.sig, std.fmt.Case.lower), .{}, s.writer());
         try s.concat(",\"pubkey\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.pubkey, std.fmt.Case.lower), .{}, s.writer());
         try s.concat(",\"created_at\":");
@@ -267,6 +265,8 @@ pub const Event = struct {
         try self.serializeTags(s);
         try s.concat(",\"content\":");
         try std.json.encodeJsonString(self.content, .{}, s.writer());
+        try s.concat(",\"sig\":");
+        try std.json.encodeJsonString(&std.fmt.bytesToHex(self.sig, std.fmt.Case.lower), .{}, s.writer());
         try s.concat("}");
     }
 
@@ -307,18 +307,21 @@ pub const Event = struct {
 test "deserialize and serialize events" {
     var allocator = std.testing.allocator;
 
-    const data =
-        \\ {"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
-    ;
-    var event = try deserialize(data, allocator);
-    defer event.deinit();
+    const jevents = [_][]const u8{
+        \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
+        ,
+        \\{"id":"440cd22bce7c5d8682522678bdcaa120e0efd821a7cad6d4b621558a386316a3","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1697155143,"kind":1,"tags":[["s","qwmke","asn"],["xxx","xxx","xxx","xxx"],["z","s"]],"content":"skdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdb","sig":"0b51c4470b51c578e1305db7420587f25c20986f63b9c51f10422780e4bb35671c1f09cb7bdd6f0dea029551866cca8ec95c7d0d29e2020efb54e21d59e8d7ce"}
+        ,
+    };
 
-    const expected: []const u8 =
-        \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife"}
-    ;
-    var buf = string.init(allocator);
-    defer buf.deinit();
+    for (jevents) |jevent| {
+        var event = try deserialize(jevent, allocator);
+        defer event.deinit();
 
-    try event.serialize(&buf);
-    try std.testing.expectEqualStrings(expected, buf.str());
+        var buf = string.init(allocator);
+        defer buf.deinit();
+
+        try event.serialize(&buf);
+        try std.testing.expectEqualStrings(jevent, buf.str());
+    }
 }
