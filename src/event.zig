@@ -138,7 +138,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
 
                                     // take only the items that were filled in this tag
                                     tags[t] = tag[0..ti];
-                                    allocator.free(tag[ti..]); // free the rest
+                                    _ = try allocator.realloc(tag, ti);
 
                                     t += 1; // advance this index
                                     if (t > MAX_TAGS) {
@@ -170,7 +170,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                     }
                     // take only the tags that were filled
                     event.tags = tags[0..t];
-                    allocator.free(tags[t..]); // free the rest
+                    _ = try allocator.realloc(tags, t);
                 } else {
                     continue;
                 }
