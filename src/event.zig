@@ -16,97 +16,77 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
         .allocator = allocator,
     };
     var missing_fields: u8 = 7;
-    while (missing_fields > 0) {
+    fields: while (missing_fields > 0) {
         var name_token: ?std.json.Token = try scanner.nextAlloc(allocator, .alloc_if_needed);
+
+        // assume this field is one that we are expecting -- if it isn't we will add it back in the end
+        missing_fields -= 1;
+
         switch (name_token.?) {
             inline .string, .allocated_string => |name| {
                 // id, pubkey and sig are hex values, we will translate these into bytes so
                 // we prefer to not have to allocate them if possible (when the result is .string
                 // it is just a pointer to the original json buffer)
-                if (std.mem.eql(u8, name, "id")) {
-                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
-                    switch (val) {
-                        .string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.id, str);
-                        },
-                        .allocated_string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.id, str);
-                            allocator.free(str);
-                        },
-                        else => {
-                            return DeserializationError.UnexpectedValue;
-                        },
+                inline for ([_][]const u8{ "id", "pubkey", "sig" }) |fname| {
+                    if (std.mem.eql(u8, name, fname)) {
+                        var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                        var dest = &@field(event, fname);
+                        switch (val) {
+                            .string => |str| {
+                                _ = try std.fmt.hexToBytes(dest, str);
+                            },
+                            .allocated_string => |str| {
+                                _ = try std.fmt.hexToBytes(dest, str);
+                                allocator.free(str);
+                            },
+                            else => {
+                                std.debug.print("unexpected {} in \n", .{val});
+                                return DeserializationError.UnexpectedValue;
+                            },
+                        }
+                        continue :fields;
                     }
-                } else if (std.mem.eql(u8, name, "pubkey")) {
-                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
-                    switch (val) {
-                        .string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.pubkey, str);
-                        },
-                        .allocated_string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.pubkey, str);
-                            allocator.free(str);
-                        },
-                        else => {
-                            return DeserializationError.UnexpectedValue;
-                        },
+                }
+
+                // for numbers (kind and created_at) we also don't care to allocate
+                // since we have to parse them into integers
+                inline for ([_][]const u8{ "kind", "created_at" }) |fname| {
+                    if (std.mem.eql(u8, name, fname)) {
+                        var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
+                        const typ = @TypeOf(@field(event, fname));
+                        switch (val) {
+                            .number => |str| {
+                                @field(event, fname) = try std.fmt.parseInt(typ, str, 10);
+                            },
+                            .allocated_number => |str| {
+                                @field(event, fname) = try std.fmt.parseInt(typ, str, 10);
+                                allocator.free(str);
+                            },
+                            else => {
+                                std.debug.print("unexpected {}\n", .{val});
+                                return DeserializationError.UnexpectedValue;
+                            },
+                        }
+                        continue :fields;
                     }
-                } else if (std.mem.eql(u8, name, "sig")) {
-                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
-                    switch (val) {
-                        .string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.sig, str);
-                        },
-                        .allocated_string => |str| {
-                            _ = try std.fmt.hexToBytes(&event.sig, str);
-                            allocator.free(str);
-                        },
-                        else => {
-                            return DeserializationError.UnexpectedValue;
-                        },
-                    }
-                } else if (std.mem.eql(u8, name, "content")) {
-                    // content is different, we prefer to allocate because we will need to store
-                    // and keep track of it anyway.
+                }
+
+                // content is different, we prefer to allocate because we will need to store
+                // and keep track of it anyway.
+                if (std.mem.eql(u8, name, "content")) {
                     var val = try scanner.nextAlloc(allocator, .alloc_always);
                     if (val == .allocated_string) {
                         event.content = val.allocated_string;
                     } else {
+                        std.debug.print("unexpected {}\n", .{val});
                         return DeserializationError.UnexpectedValue;
                     }
-                } else if (std.mem.eql(u8, name, "kind")) {
-                    // for numbers (kind and created_at) we also don't care to allocate
-                    // since we have to parse them into integers
-                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
-                    switch (val) {
-                        .number => |str| {
-                            event.kind = try std.fmt.parseInt(u16, str, 10);
-                        },
-                        .allocated_number => |str| {
-                            event.kind = try std.fmt.parseInt(u16, str, 10);
-                            allocator.free(str);
-                        },
-                        else => {
-                            return DeserializationError.UnexpectedValue;
-                        },
-                    }
-                } else if (std.mem.eql(u8, name, "created_at")) {
-                    var val = try scanner.nextAlloc(allocator, .alloc_if_needed);
-                    switch (val) {
-                        .number => |str| {
-                            event.created_at = try std.fmt.parseInt(i64, str, 10);
-                        },
-                        .allocated_number => |str| {
-                            event.created_at = try std.fmt.parseInt(i64, str, 10);
-                            allocator.free(str);
-                        },
-                        else => {
-                            return DeserializationError.UnexpectedValue;
-                        },
-                    }
-                } else if (std.mem.eql(u8, name, "tags")) {
-                    // tags is the hardest thing, we will iterate through everything in this complicated setup
-                    // and we will allocate everything because we must keep everything just like with content
+                    continue :fields;
+                }
+
+                // tags is the hardest thing, we will iterate through everything in this complicated setup
+                // and we will allocate everything because we must keep everything just like with content
+                if (std.mem.eql(u8, name, "tags")) {
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
                     event.tags = try Tags.initCapacity(allocator, 100);
 
@@ -118,6 +98,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             .array_begin => {
                                 if (tag_open) {
                                     // can't have arrays inside tags
+                                    std.debug.print("unexpected array_begin\n", .{});
                                     return DeserializationError.UnexpectedValue;
                                 }
 
@@ -140,6 +121,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             .allocated_string => |v| {
                                 if (!tag_open) {
                                     // can't have a loose string inside the tags array
+                                    std.debug.print("unexpected string in tags array\n", .{});
                                     return DeserializationError.UnexpectedValue;
                                 }
 
@@ -148,19 +130,24 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             },
                             else => {
                                 // this is not a valid tag
+                                std.debug.print("unexpected item in tags array\n", .{});
                                 return DeserializationError.UnexpectedValue;
                             },
                         }
                     }
-                } else {
-                    continue;
+                    continue :fields;
                 }
-                missing_fields -= 1;
+
+                // this is an extraneous key in the event object, skip it
+                try scanner.skipValue();
             },
-            else => {
-                std.debug.print("unexpected={?}\n", .{name_token});
+            else => |v| {
+                std.debug.print("unreachable {}\n", .{v});
+                unreachable;
             },
         }
+
+        missing_fields += 1; // the field we got wasn't expected
     }
 
     return event;
