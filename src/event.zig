@@ -1,7 +1,6 @@
 const std = @import("std");
 const libsecp256k1 = @import("libsecp256k1.zig");
 const keys = @import("keys.zig");
-const string = @import("string.zig");
 
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
 pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
@@ -166,6 +165,8 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
     return event;
 }
 
+const String = std.ArrayList(u8);
+
 pub const Tags = std.ArrayList(Tag);
 pub const Tag = std.ArrayList([]u8);
 
@@ -193,16 +194,14 @@ pub const Event = struct {
 
     pub fn verify(self: Event, allocator: std.mem.Allocator) ValidationError!void {
         // check id
-        var s = string.init(allocator);
-        defer s.deinit();
-
-        self.serializeForHashing(&s) catch |err| switch (err) {
+        var ser = try self.serializeForHashing(allocator) catch |err| switch (err) {
             error.OutOfMemory => return ValidationError.InternalError,
             error.InvalidRange => unreachable,
         };
+        defer ser.deinit();
 
         var id: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(s.str(), &id, .{});
+        std.crypto.hash.sha2.Sha256.hash(ser.items, &id, .{});
         if (!std.mem.eql(u8, &id, &self.id)) {
             return ValidationError.IdDoesntMatch;
         }
@@ -227,65 +226,66 @@ pub const Event = struct {
         sk.serializedPublicKey(&self.pubkey);
 
         // serialize and hash the event to obtain the id
-        var s = string.init(allocator);
-        defer s.deinit();
-        try self.serializeForHashing(&s);
-        std.crypto.hash.sha2.Sha256.hash(s.str(), &self.id, .{});
+        var ser = try self.serializeForHashing(allocator);
+        defer ser.deinit();
+        std.crypto.hash.sha2.Sha256.hash(ser.items, &self.id, .{});
 
         // fill in the signature
         try sk.sign(&self.sig, self.id);
     }
 
-    pub fn serialize(self: *Event, s: *string.String) !void {
-        try s.allocate("'id''','pubkey''','sig''','content''','tags'[],'kind'~~~~~,'created_at'~~~~~~~~~~,".len + 128 + 64 + 64 + self.content.len);
-        try s.concat("{\"id\":");
+    pub fn serialize(self: *Event, allocator: std.mem.Allocator) !String {
+        var s = try String.initCapacity(allocator, "'id''','pubkey''','sig''','content''','tags'[],'kind'~~~~~,'created_at'~~~~~~~~~~,".len + 128 + 64 + 64 + self.content.len);
+        try s.appendSlice("{\"id\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.id, std.fmt.Case.lower), .{}, s.writer());
-        try s.concat(",\"pubkey\":");
+        try s.appendSlice(",\"pubkey\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.pubkey, std.fmt.Case.lower), .{}, s.writer());
-        try s.concat(",\"created_at\":");
+        try s.appendSlice(",\"created_at\":");
         try std.fmt.formatInt(self.created_at, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.concat(",\"kind\":");
+        try s.appendSlice(",\"kind\":");
         try std.fmt.formatInt(self.kind, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.concat(",\"tags\":");
-        try self.serializeTags(s);
-        try s.concat(",\"content\":");
+        try s.appendSlice(",\"tags\":");
+        try self.serializeTags(&s);
+        try s.appendSlice(",\"content\":");
         try std.json.encodeJsonString(self.content, .{}, s.writer());
-        try s.concat(",\"sig\":");
+        try s.appendSlice(",\"sig\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.sig, std.fmt.Case.lower), .{}, s.writer());
-        try s.concat("}");
+        try s.appendSlice("}");
+        return s;
     }
 
-    fn serializeForHashing(self: Event, s: *string.String) !void {
-        try s.allocate("[0,'',,,[],'']".len + 64 + self.content.len);
-        try s.concat("[0,");
+    fn serializeForHashing(self: Event, allocator: std.mem.Allocator) !String {
+        var s = try String.initCapacity(allocator, "[0,'',,,[],'']".len + 64 + self.content.len);
+        try s.appendSlice("[0,");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.pubkey, std.fmt.Case.lower), .{}, s.writer());
-        try s.concat(",");
+        try s.appendSlice(",");
         try std.fmt.formatInt(self.created_at, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.concat(",");
+        try s.appendSlice(",");
         try std.fmt.formatInt(self.kind, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.concat(",");
-        try self.serializeTags(s);
-        try s.concat(",");
+        try s.appendSlice(",");
+        try self.serializeTags(&s);
+        try s.appendSlice(",");
         try std.json.encodeJsonString(self.content, .{}, s.writer());
-        try s.concat("]");
+        try s.appendSlice("]");
+        return s;
     }
 
-    fn serializeTags(self: Event, w: *string.String) !void {
-        try w.concat("[");
+    fn serializeTags(self: Event, w: *String) !void {
+        try w.append('[');
         for (self.tags.items, 0..) |tag, t| {
             if (t != 0) {
-                try w.concat(",");
+                try w.appendSlice(",");
             }
-            try w.concat("[");
+            try w.appendSlice("[");
             for (tag.items, 0..) |item, i| {
                 if (i != 0) {
-                    try w.concat(",");
+                    try w.appendSlice(",");
                 }
                 try std.json.encodeJsonString(item, .{}, w.writer());
             }
-            try w.concat("]");
+            try w.appendSlice("]");
         }
-        try w.concat("]");
+        try w.appendSlice("]");
     }
 };
 
@@ -303,10 +303,8 @@ test "deserialize and serialize events" {
         var event = try deserialize(jevent, allocator);
         defer event.deinit();
 
-        var buf = string.init(allocator);
-        defer buf.deinit();
-
-        try event.serialize(&buf);
-        try std.testing.expectEqualStrings(jevent, buf.str());
+        var ser = try event.serialize(allocator);
+        defer ser.deinit();
+        try std.testing.expectEqualStrings(jevent, ser.items);
     }
 }
