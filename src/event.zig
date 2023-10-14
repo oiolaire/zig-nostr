@@ -294,3 +294,21 @@ test "deserialize and serialize events" {
         try std.testing.expectEqualStrings(jevent, ser.items);
     }
 }
+
+test "deserialize and serialize an event with extra fields" {
+    var allocator = std.testing.allocator;
+
+    const jevent =
+        \\{"id":"20849298f112b9528b1dfde321ca80499654a8222fb81df7e46dca78cd922f45","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1697310467,"kind":17,"random":"quwheo87321g48eivbad","other_stuff":{"zzz": {"_": [null, true, [], 8998]}},"tags":[[],["A"]],"content":"","sig":"29dafa46e275385cc557f8d69c4ed97a20b5e3b494a845432dac49e8393770b2953a731476bd714959538b5956264e97db868fba9ce81b939dcb8d1adf12eef6"}
+    ;
+    const jevent_expected =
+        \\{"id":"20849298f112b9528b1dfde321ca80499654a8222fb81df7e46dca78cd922f45","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1697310467,"kind":17,"tags":[[],["A"]],"content":"","sig":"29dafa46e275385cc557f8d69c4ed97a20b5e3b494a845432dac49e8393770b2953a731476bd714959538b5956264e97db868fba9ce81b939dcb8d1adf12eef6"}
+    ;
+
+    var event = try deserialize(jevent, allocator);
+    defer event.deinit();
+
+    var ser = try event.serialize(allocator);
+    defer ser.deinit();
+    try std.testing.expectEqualStrings(jevent_expected, ser.items);
+}
