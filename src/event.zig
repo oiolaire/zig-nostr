@@ -1,6 +1,7 @@
 const std = @import("std");
 const libsecp256k1 = @import("libsecp256k1.zig");
 const keys = @import("keys.zig");
+const String = @import("string.zig").String;
 
 pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
 pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
@@ -165,8 +166,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
     return event;
 }
 
-const String = std.ArrayList(u8);
-
 pub const Tags = std.ArrayList(Tag);
 pub const Tag = std.ArrayList([]u8);
 
@@ -250,7 +249,7 @@ pub const Event = struct {
         try std.json.encodeJsonString(self.content, .{}, s.writer());
         try s.appendSlice(",\"sig\":");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.sig, std.fmt.Case.lower), .{}, s.writer());
-        try s.appendSlice("}");
+        try s.append('}');
         return s;
     }
 
@@ -258,15 +257,15 @@ pub const Event = struct {
         var s = try String.initCapacity(allocator, "[0,'',,,[],'']".len + 64 + self.content.len);
         try s.appendSlice("[0,");
         try std.json.encodeJsonString(&std.fmt.bytesToHex(self.pubkey, std.fmt.Case.lower), .{}, s.writer());
-        try s.appendSlice(",");
+        try s.append(',');
         try std.fmt.formatInt(self.created_at, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.appendSlice(",");
+        try s.append(',');
         try std.fmt.formatInt(self.kind, 10, std.fmt.Case.lower, .{}, s.writer());
-        try s.appendSlice(",");
+        try s.append(',');
         try self.serializeTags(&s);
-        try s.appendSlice(",");
+        try s.append(',');
         try std.json.encodeJsonString(self.content, .{}, s.writer());
-        try s.appendSlice("]");
+        try s.append(']');
         return s;
     }
 
@@ -274,18 +273,18 @@ pub const Event = struct {
         try w.append('[');
         for (self.tags.items, 0..) |tag, t| {
             if (t != 0) {
-                try w.appendSlice(",");
+                try w.append(',');
             }
-            try w.appendSlice("[");
+            try w.append('[');
             for (tag.items, 0..) |item, i| {
                 if (i != 0) {
-                    try w.appendSlice(",");
+                    try w.append(',');
                 }
                 try std.json.encodeJsonString(item, .{}, w.writer());
             }
-            try w.appendSlice("]");
+            try w.append(']');
         }
-        try w.appendSlice("]");
+        try w.append(']');
     }
 };
 
@@ -293,7 +292,7 @@ test "deserialize and serialize events" {
     var allocator = std.testing.allocator;
 
     const jevents = [_][]const u8{
-        \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":1,"tags":[],"content":"hello from the nostr army knife","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
+        \\{"id":"763644763bd041b621e169c1d9b69ce02cbf300a62d4723d6b7a86d09bed3a49","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1696961892,"kind":27622,"tags":[],"content":"maçã\n\n\"verde\"","sig":"8adce45a11dca7325aa1f99368e24b20197640b28cf599eb17b25ff2e247d032b337957c74b6730f3131824ae8f706241ee4ab4563a98cf4dcc95d0e126ae379"}
         ,
         \\{"id":"440cd22bce7c5d8682522678bdcaa120e0efd821a7cad6d4b621558a386316a3","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1697155143,"kind":1,"tags":[["s","qwmke","asn"],["xxx","xxx","xxx","xxx"],["z","s"]],"content":"skdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdbskdlhsalkdsakdbsalkdbsakdb","sig":"0b51c4470b51c578e1305db7420587f25c20986f63b9c51f10422780e4bb35671c1f09cb7bdd6f0dea029551866cca8ec95c7d0d29e2020efb54e21d59e8d7ce"}
         ,
