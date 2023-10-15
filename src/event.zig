@@ -135,7 +135,9 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                 // this is an extraneous key in the event object, skip it
                 try scanner.skipValue();
             },
-            else => unreachable,
+
+            // this might due to malformed json or an event missing fields
+            else => return DeserializationError.UnexpectedValue,
         }
 
         missing_fields += 1; // the field we got wasn't expected
