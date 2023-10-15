@@ -1,7 +1,13 @@
 const std = @import("std");
+const assert = @import("std").debug.assert;
 const String = @import("string.zig").String;
 
 pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
+
+// letters on the ascii table
+const VALID_TAG_FILTER_RANGE_START: u8 = 48; // '0'
+const VALID_TAG_FILTER_RANGE_END: u8 = 122; // 'z'
+const VALID_TAG_FILTER_SIZE: u8 = VALID_TAG_FILTER_RANGE_END - VALID_TAG_FILTER_RANGE_START + 1; // +1 because it is inclusive on the end
 
 pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
     var scanner = std.json.Scanner.initCompleteInput(allocator, json);
@@ -10,6 +16,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
     if (.object_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
 
     var filter = Filter{
+        .tags = TagFilters.init(allocator),
         .allocator = allocator,
     };
 
@@ -18,7 +25,13 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
 
         switch (name_token.?) {
             inline .string, .allocated_string => |name| {
-                inline for (.{ .{ "ids", "ids" }, .{ "authors", "authors" }, .{ "#e", "_e" }, .{ "#p", "_p" }, .{ "#q", "_q" } }) |fname| {
+                inline for (.{
+                    .{ "ids", "ids" },
+                    .{ "authors", "authors" },
+                    .{ "#e", "_e" },
+                    .{ "#p", "_p" },
+                    .{ "#q", "_q" },
+                }) |fname| {
                     if (std.mem.eql(u8, name, fname[0])) {
                         var list = try std.ArrayList([32]u8).initCapacity(allocator, 100);
                         if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
@@ -29,7 +42,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
                                     var dest: [32]u8 = undefined;
                                     _ = try std.fmt.hexToBytes(&dest, str);
                                     if (super == .allocated_string) {
-                                        // allocator.free(str);
+                                        allocator.free(str);
                                     }
                                     try list.append(dest);
                                 },
@@ -51,7 +64,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
                             .number, .allocated_number => |str| {
                                 const dest = try std.fmt.parseInt(u16, str, 10);
                                 if (super == .allocated_number) {
-                                    // allocator.free(str);
+                                    allocator.free(str);
                                 }
                                 try filter.kinds.?.append(dest);
                             },
@@ -62,7 +75,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
                     continue :fields;
                 }
 
-                if (name.len >= 2 and name[0] == '#') {
+                if (name.len == 2 and name[0] == '#') {
                     filter.tags = TagFilters.init(allocator);
                     var list = try std.ArrayList([]u8).initCapacity(allocator, 100);
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
@@ -74,7 +87,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
                             else => return DeserializationError.UnexpectedValue,
                         }
                     }
-                    try filter.tags.?.put(name[0..], list);
+                    filter.tags.put(name[1], list);
                     continue :fields;
                 }
 
@@ -88,7 +101,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
                             },
                             .allocated_number => |str| {
                                 @field(filter, fname) = try std.fmt.parseInt(typ, str, 10);
-                                // allocator.free(str);
+                                allocator.free(str);
                             },
                             else => return DeserializationError.UnexpectedValue,
                         }
@@ -110,7 +123,62 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Filter {
     return filter;
 }
 
-pub const TagFilters = std.StringHashMap(std.ArrayList([]u8));
+pub const TagFilters = struct {
+    internal: [VALID_TAG_FILTER_SIZE]?std.ArrayList([]u8),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) TagFilters {
+        var tag_filters: [VALID_TAG_FILTER_SIZE]?std.ArrayList([]u8) = undefined;
+        @memset(&tag_filters, null);
+        return TagFilters{
+            .internal = tag_filters,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn iterator(self: *TagFilters) Iterator {
+        return Iterator{ .tag_filters = self };
+    }
+
+    pub fn put(self: *TagFilters, char: u8, value: std.ArrayList([]u8)) void {
+        assert(char >= VALID_TAG_FILTER_RANGE_START and char <= VALID_TAG_FILTER_RANGE_END);
+        self.internal[char - VALID_TAG_FILTER_RANGE_START] = value;
+    }
+
+    pub fn get(self: TagFilters, char: u8) ?std.ArrayList([]u8) {
+        assert(char >= VALID_TAG_FILTER_RANGE_START and char <= VALID_TAG_FILTER_RANGE_END);
+        return self.internal[char - VALID_TAG_FILTER_RANGE_START];
+    }
+
+    pub fn delete(self: *TagFilters, char: u8) void {
+        assert(char >= VALID_TAG_FILTER_RANGE_START and char <= VALID_TAG_FILTER_RANGE_END);
+        self.internal[char - VALID_TAG_FILTER_RANGE_START] = null;
+    }
+
+    pub const Entry = struct {
+        key: u8,
+        value: std.ArrayList([]u8),
+    };
+
+    pub const Iterator = struct {
+        tag_filters: *TagFilters,
+        index: u8 = 0,
+
+        pub fn next(self: *Iterator) ?Entry {
+            for (self.index..VALID_TAG_FILTER_SIZE) |i| {
+                if (self.tag_filters.internal[i]) |list| {
+                    var _i: u8 = @truncate(i);
+                    self.index = _i + 1;
+                    return Entry{
+                        .key = VALID_TAG_FILTER_RANGE_START + _i,
+                        .value = list,
+                    };
+                }
+            }
+            return null;
+        }
+    };
+};
 
 pub const Filter = struct {
     kinds: ?std.ArrayList(u16) = null,
@@ -119,45 +187,37 @@ pub const Filter = struct {
     _e: ?std.ArrayList([32]u8) = null, // 'e' tags
     _p: ?std.ArrayList([32]u8) = null, // 'p' tags
     _q: ?std.ArrayList([32]u8) = null, // 'q' tags
-    tags: ?TagFilters = null,
+    tags: TagFilters,
     since: ?i64 = null,
     until: ?i64 = null,
     limit: ?u16 = null,
     allocator: ?std.mem.Allocator = null,
 
-    pub fn deinit(self: Filter) void {
+    pub fn deinit(self: *Filter) void {
         if (self.allocator) |allocator| {
-            _ = allocator;
             inline for (.{ "ids", "authors", "kinds", "_e", "_p", "_q" }) |fname| {
                 if (@field(self, fname)) |list| {
-                    for (list.items) |item| {
-                        _ = item;
-                        // allocator.free(item);
-                    }
                     list.deinit();
                 }
             }
 
-            if (self.tags) |tags| {
-                var it = tags.iterator();
-                while (it.next()) |entry| {
-                    for (entry.value_ptr.*.items) |item| {
-                        _ = item;
-                        // allocator.free(item);
-                    }
+            var it = self.tags.iterator();
+            while (it.next()) |entry| {
+                for (entry.value.items) |item| {
+                    allocator.free(item);
                 }
-                // tags.deinit();
+                entry.value.deinit();
             }
         }
     }
 
-    pub fn serialize(self: Filter, allocator: std.mem.Allocator) !String {
+    pub fn serialize(self: *Filter, allocator: std.mem.Allocator) !String {
         var s = try String.initCapacity(allocator, 500);
         try self.serializeToWriter(&s);
         return s;
     }
 
-    pub fn serializeToWriter(self: Filter, s: *String) !void {
+    pub fn serializeToWriter(self: *Filter, s: *String) !void {
         try s.append('{');
         var empty = true;
         inline for (.{ .{ "ids", "ids" }, .{ "authors", "authors" }, .{ "_e", "#e" }, .{ "_p", "#p" }, .{ "_q", "#q" } }) |fname| {
@@ -194,21 +254,21 @@ pub const Filter = struct {
             _ = s.pop();
             try s.appendSlice("],");
         }
-        if (self.tags) |tags| {
-            var it = tags.iterator();
-            while (it.next()) |entry| {
-                empty = false;
-                try s.appendSlice("\"#");
-                try s.appendSlice(entry.key_ptr.*);
-                try s.appendSlice("\":[");
-                for (entry.value_ptr.*.items) |item| {
-                    try std.json.encodeJsonString(item, .{}, s.writer());
-                    try s.append(',');
-                }
-                _ = s.pop();
-                try s.appendSlice("],");
+
+        var it = self.tags.iterator();
+        while (it.next()) |entry| {
+            empty = false;
+            try s.appendSlice("\"#");
+            try s.append(entry.key);
+            try s.appendSlice("\":[");
+            for (entry.value.items) |item| {
+                try std.json.encodeJsonString(item, .{}, s.writer());
+                try s.append(',');
             }
+            _ = s.pop();
+            try s.appendSlice("],");
         }
+
         inline for ([_][]const u8{ "since", "until", "limit" }) |fname| {
             if (@field(self, fname)) |v| {
                 empty = false;
@@ -233,6 +293,10 @@ test "deserialize and serialize filters" {
         \\{"authors":["cf473ebe9736ba689c718de3d5ef38909bca57db3c38e3f9de7f5dadfc88ed6f"],"limit":12}
         ,
         \\{}
+        ,
+        \\{"ids":["2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89"],"authors":["cf473ebe9736ba689c718de3d5ef38909bca57db3c38e3f9de7f5dadfc88ed6f"],"#p":["4477bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9e2e2"],"since":9999}
+        ,
+        \\{"ids":["2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89","2103bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9db89"],"authors":["cf473ebe9736ba689c718de3d5ef38909bca57db3c38e3f9de7f5dadfc88ed6f"],"#p":["4477bc0e14061a0175353cd381502942b46e3a0a2cf8439c57231137b8c9e2e2"],"#z":["wwwwzzz"],"since":9999}
         ,
     };
 
