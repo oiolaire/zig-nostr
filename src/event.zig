@@ -40,7 +40,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                 allocator.free(str);
                             },
                             else => {
-                                std.debug.print("unexpected {} in \n", .{val});
                                 return DeserializationError.UnexpectedValue;
                             },
                         }
@@ -63,7 +62,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                 allocator.free(str);
                             },
                             else => {
-                                std.debug.print("unexpected {}\n", .{val});
                                 return DeserializationError.UnexpectedValue;
                             },
                         }
@@ -78,7 +76,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                     if (val == .allocated_string) {
                         event.content = val.allocated_string;
                     } else {
-                        std.debug.print("unexpected {}\n", .{val});
                         return DeserializationError.UnexpectedValue;
                     }
                     continue :fields;
@@ -98,7 +95,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             .array_begin => {
                                 if (tag_open) {
                                     // can't have arrays inside tags
-                                    std.debug.print("unexpected array_begin\n", .{});
                                     return DeserializationError.UnexpectedValue;
                                 }
 
@@ -121,7 +117,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             .allocated_string => |v| {
                                 if (!tag_open) {
                                     // can't have a loose string inside the tags array
-                                    std.debug.print("unexpected string in tags array\n", .{});
                                     return DeserializationError.UnexpectedValue;
                                 }
 
@@ -130,7 +125,6 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             },
                             else => {
                                 // this is not a valid tag
-                                std.debug.print("unexpected item in tags array\n", .{});
                                 return DeserializationError.UnexpectedValue;
                             },
                         }
@@ -141,10 +135,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                 // this is an extraneous key in the event object, skip it
                 try scanner.skipValue();
             },
-            else => |v| {
-                std.debug.print("unreachable {}\n", .{v});
-                unreachable;
-            },
+            else => unreachable,
         }
 
         missing_fields += 1; // the field we got wasn't expected
@@ -164,18 +155,20 @@ pub const Event = struct {
     pubkey: [32]u8 = undefined,
     id: [32]u8 = undefined,
     sig: [64]u8 = undefined,
-    allocator: std.mem.Allocator = undefined,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn deinit(self: Event) void {
-        self.allocator.free(self.content);
+        if (self.allocator) |allocator| {
+            allocator.free(self.content);
 
-        for (self.tags.items) |tag| {
-            for (tag.items) |item| {
-                self.allocator.free(item);
+            for (self.tags.items) |tag| {
+                for (tag.items) |item| {
+                    allocator.free(item);
+                }
+                tag.deinit();
             }
-            tag.deinit();
+            self.tags.deinit();
         }
-        self.tags.deinit();
     }
 
     pub fn verify(self: Event, allocator: std.mem.Allocator) ValidationError!void {
