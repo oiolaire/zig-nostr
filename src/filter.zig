@@ -209,6 +209,7 @@ pub const Filter = struct {
                 entry.value.deinit();
             }
         }
+        self.* = undefined;
     }
 
     pub fn serialize(self: *Filter, allocator: std.mem.Allocator) !String {

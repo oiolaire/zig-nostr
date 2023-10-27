@@ -1,12 +1,13 @@
 const std = @import("std");
+const assert = @import("std").debug.assert;
 const libsecp256k1 = @import("libsecp256k1.zig");
 const keys = @import("keys.zig");
 const String = @import("string.zig").String;
 
-pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError };
+pub const ValidationError = error{ IdDoesntMatch, InvalidPublicKey, InvalidSignature, InternalError, OutOfMemory };
 pub const DeserializationError = error{ UnexpectedToken, UnexpectedValue, TooManyTagItems, TooManyTags };
 
-pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
+pub fn deserialize(allocator: std.mem.Allocator, json: []const u8) !Event {
     var scanner = std.json.Scanner.initCompleteInput(allocator, json);
     defer scanner.deinit();
 
@@ -85,7 +86,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                 // and we will allocate everything because we must keep everything just like with content
                 if (std.mem.eql(u8, name, "tags")) {
                     if (.array_begin != try scanner.next()) return DeserializationError.UnexpectedToken;
-                    event.tags = try Tags.initCapacity(allocator, 100);
+                    var tags = try Tags.initCapacity(allocator, 100);
 
                     var tag_open = false;
                     var tag: Tag = undefined;
@@ -108,7 +109,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                                     tag_open = false;
 
                                     // take only the items that were filled in this tag
-                                    try event.tags.append(tag);
+                                    try tags.append(tag);
                                 } else {
                                     // closing the tags list
                                     break;
@@ -129,6 +130,7 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
                             },
                         }
                     }
+                    event.tags = tags;
                     continue :fields;
                 }
 
@@ -147,37 +149,39 @@ pub fn deserialize(json: []const u8, allocator: std.mem.Allocator) !Event {
 }
 
 pub const Tags = std.ArrayList(Tag);
-pub const Tag = std.ArrayList([]u8);
+pub const Tag = std.ArrayList([]const u8);
 
 pub const Event = struct {
     kind: u16 = 1,
     content: []const u8 = &.{},
-    tags: Tags = undefined,
+    tags: ?Tags = null,
     created_at: i64 = undefined,
     pubkey: [32]u8 = undefined,
     id: [32]u8 = undefined,
     sig: [64]u8 = undefined,
     allocator: ?std.mem.Allocator = null,
 
-    pub fn deinit(self: Event) void {
+    pub fn deinit(self: *Event) void {
         if (self.allocator) |allocator| {
             allocator.free(self.content);
 
-            for (self.tags.items) |tag| {
-                for (tag.items) |item| {
-                    allocator.free(item);
+            if (self.tags) |tags| {
+                for (tags.items) |tag| {
+                    for (tag.items) |item| {
+                        allocator.free(item);
+                    }
+                    tag.deinit();
                 }
-                tag.deinit();
+                tags.deinit();
             }
-            self.tags.deinit();
         }
+        self.* = undefined;
     }
 
     pub fn verify(self: Event, allocator: std.mem.Allocator) ValidationError!void {
         // check id
-        var ser = try self.serializeForHashing(allocator) catch |err| switch (err) {
+        var ser = self.serializeForHashing(allocator) catch |err| switch (err) {
             error.OutOfMemory => return ValidationError.InternalError,
-            error.InvalidRange => unreachable,
         };
         defer ser.deinit();
 
@@ -199,12 +203,12 @@ pub const Event = struct {
         }
     }
 
-    pub fn finalize(self: *Event, sk: keys.SecretKey, allocator: std.mem.Allocator) !void {
+    pub fn finalize(self: *Event, allocator: std.mem.Allocator, sk: keys.SecretKey) !void {
         // set created_at if not set
         self.created_at = std.time.timestamp();
 
         // write public key
-        sk.serializedPublicKey(&self.pubkey);
+        self.pubkey = sk.serializedPublicKey();
 
         // serialize and hash the event to obtain the id
         var ser = try self.serializeForHashing(allocator);
@@ -212,7 +216,7 @@ pub const Event = struct {
         std.crypto.hash.sha2.Sha256.hash(ser.items, &self.id, .{});
 
         // fill in the signature
-        try sk.sign(&self.sig, self.id);
+        self.sig = try sk.sign(self.id);
     }
 
     pub fn serialize(self: *Event, allocator: std.mem.Allocator) !String {
@@ -253,18 +257,20 @@ pub const Event = struct {
 
     fn serializeTags(self: Event, w: *String) !void {
         try w.append('[');
-        for (self.tags.items, 0..) |tag, t| {
-            if (t != 0) {
-                try w.append(',');
-            }
-            try w.append('[');
-            for (tag.items, 0..) |item, i| {
-                if (i != 0) {
+        if (self.tags) |tags| {
+            for (tags.items, 0..) |tag, t| {
+                if (t != 0) {
                     try w.append(',');
                 }
-                try std.json.encodeJsonString(item, .{}, w.writer());
+                try w.append('[');
+                for (tag.items, 0..) |item, i| {
+                    if (i != 0) {
+                        try w.append(',');
+                    }
+                    try std.json.encodeJsonString(item, .{}, w.writer());
+                }
+                try w.append(']');
             }
-            try w.append(']');
         }
         try w.append(']');
     }
@@ -281,7 +287,7 @@ test "deserialize and serialize events" {
     };
 
     for (jevents) |jevent| {
-        var event = try deserialize(jevent, allocator);
+        var event = try deserialize(allocator, jevent);
         defer event.deinit();
 
         var ser = try event.serialize(allocator);
@@ -300,10 +306,33 @@ test "deserialize and serialize an event with extra fields" {
         \\{"id":"20849298f112b9528b1dfde321ca80499654a8222fb81df7e46dca78cd922f45","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1697310467,"kind":17,"tags":[[],["A"]],"content":"","sig":"29dafa46e275385cc557f8d69c4ed97a20b5e3b494a845432dac49e8393770b2953a731476bd714959538b5956264e97db868fba9ce81b939dcb8d1adf12eef6"}
     ;
 
-    var event = try deserialize(jevent, allocator);
+    var event = try deserialize(allocator, jevent);
     defer event.deinit();
 
     var ser = try event.serialize(allocator);
     defer ser.deinit();
     try std.testing.expectEqualStrings(jevent_expected, ser.items);
+}
+
+test "create an event and sign it" {
+    var allocator = std.testing.allocator;
+
+    var evt = Event{
+        .kind = 1,
+        .content = try allocator.dupe(u8, "hello world"),
+        .tags = try Tags.initCapacity(allocator, 5),
+        .allocator = allocator,
+    };
+    var tag = try Tag.initCapacity(allocator, 2);
+    tag.appendAssumeCapacity(try allocator.dupe(u8, "t"));
+    tag.appendAssumeCapacity(try allocator.dupe(u8, "spam"));
+    evt.tags.?.appendAssumeCapacity(tag);
+    defer evt.deinit();
+
+    try evt.finalize(
+        allocator,
+        keys.parseKey([32]u8{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132 }) catch unreachable,
+    );
+
+    try evt.verify(allocator);
 }
